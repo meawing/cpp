@@ -252,3 +252,6 @@ void ScanFreeList() {
 `ScanFreeList` никогда не удалит указатель, который находится в множестве защищённых. Сначала мы читаем `free_list`,
 а затем `hazard`. Порядок важен. Если указатель уже находится в `free_list`, он не может быть добавлен в `hazard`.
 Значит нашей проверки в (4) достаточно, чтобы обеспечить гарантии по удалению.
+
+### Полезное
+* "Safe Memory Reclamation for Dynamic Lock-Free Objects Using Atomic Reads and Writes,” Maged M. Michael, in PODC ’02: Proceedings of the Twenty-first Annual Symposium on Principles of Distributed Computing (2002), ISBN 1-58113-485-1.
