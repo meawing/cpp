@@ -8,8 +8,11 @@
 
 extern std::shared_mutex lock;
 
-void RegisterThread();
-void UnregisterThread();
+void RegisterThread() {
+}
+
+void UnregisterThread() {
+}
 
 template <class T>
 T* Acquire(std::atomic<T*>* ptr) {
