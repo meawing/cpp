@@ -38,12 +38,6 @@ public:
 private:
 };
 
-template <class T>
-class Future;
-
-template <class T>
-using FuturePtr = std::shared_ptr<Future<T>>;
-
 // Used instead of void in generic code
 struct Unit {};
 
@@ -54,29 +48,7 @@ public:
     void StartShutdown();
     void WaitShutdown();
 
-    template <class T>
-    FuturePtr<T> Invoke(std::function<T()> fn);
-
-    template <class Y, class T>
-    FuturePtr<Y> Then(FuturePtr<T> input, std::function<Y()> fn);
-
-    template <class T>
-    FuturePtr<std::vector<T>> WhenAll(std::vector<FuturePtr<T>> all);
-
-    template <class T>
-    FuturePtr<T> WhenFirst(std::vector<FuturePtr<T>> all);
-
-    template <class T>
-    FuturePtr<std::vector<T>> WhenAllBeforeDeadline(std::vector<FuturePtr<T>> all,
-                                                    std::chrono::system_clock::time_point deadline);
 };
 
 std::shared_ptr<Executor> MakeThreadPoolExecutor(uint32_t num_threads);
 
-template <class T>
-class Future : public Task {
-public:
-    T Get();
-
-private:
-};
