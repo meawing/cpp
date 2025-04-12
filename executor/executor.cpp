@@ -1,15 +1,17 @@
-// executor.cpp
 #include "executor.h"
 #include <cassert>
 #include <stdexcept>
 #include <chrono>
+#include <algorithm>
+
+thread_local uint32_t current_thread_index = 0;
 
 void Task::AddDependency(std::shared_ptr<Task> dep) {
     remaining_deps_.fetch_add(1, std::memory_order_relaxed);
     
     {
         std::lock_guard<std::mutex> lk(dep->dependents_mutex_);
-        dep->dependents_.push_back(shared_from_this());
+        dep->dependents_.push_back({shared_from_this(), false});
     }
     
     if (dep->IsFinished()) {
@@ -22,7 +24,7 @@ void Task::AddTrigger(std::shared_ptr<Task> trigger) {
     
     {
         std::lock_guard<std::mutex> lk(trigger->dependents_mutex_);
-        trigger->trigger_dependents_.push_back(shared_from_this());
+        trigger->dependents_.push_back({shared_from_this(), true});
     }
 }
 
@@ -31,9 +33,14 @@ void Task::SetTimeTrigger(std::chrono::system_clock::time_point at) {
     time_trigger_ = at;
 }
 
+std::exception_ptr Task::GetError() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return error_;
+}
+
 void Task::Cancel() {
-    State expected = State::Pending;
-    if (!state_.compare_exchange_strong(expected, State::Canceled)) {
+    TaskState::Value expected = TaskState::Pending;
+    if (!state_.compare_exchange_strong(expected, TaskState::Canceled)) {
         return;
     }
 
@@ -42,43 +49,43 @@ void Task::Cancel() {
     std::vector<std::shared_ptr<Task>> to_notify;
     {
         std::lock_guard<std::mutex> lk(dependents_mutex_);
-        for (auto& weak_t : dependents_) {
-            if (auto t = weak_t.lock()) to_notify.push_back(t);
+        to_notify.reserve(dependents_.size());
+        for (auto& dep : dependents_) {
+            if (auto t = dep.task.lock()) {
+                to_notify.push_back(t);
+            }
         }
         dependents_.clear();
-
-        for (auto& weak_t : trigger_dependents_) {
-            if (auto t = weak_t.lock()) to_notify.push_back(t);
-        }
-        trigger_dependents_.clear();
     }
 
     for (auto& t : to_notify) {
-        t->NotifyDependencyFinished();
-        t->NotifyTriggerFinished();
+        if (t) {
+            if (t->remaining_deps_.load() > 0) {
+                t->NotifyDependencyFinished();
+            }
+            t->NotifyTriggerFinished();
+        }
     }
 }
 
 void Task::Wait() {
     std::unique_lock<std::mutex> lk(mutex_);
-    cv_.wait(lk, [this] {
-        return state_.load() != State::Pending && state_.load() != State::Running;
-    });
+    cv_.wait(lk, [this] { return IsFinished(); });
 }
 
 void Task::RunTask() {
-    State expected = State::Pending;
-    if (!state_.compare_exchange_strong(expected, State::Running)) {
+    TaskState::Value expected = TaskState::Pending;
+    if (!state_.compare_exchange_strong(expected, TaskState::Running)) {
         return;
     }
 
     try {
         Run();
-        state_.store(State::Completed, std::memory_order_release);
+        state_.store(TaskState::Completed);
     } catch (...) {
         std::lock_guard<std::mutex> lk(mutex_);
         error_ = std::current_exception();
-        state_.store(State::Failed, std::memory_order_release);
+        state_.store(TaskState::Failed);
     }
 
     cv_.notify_all();
@@ -86,34 +93,28 @@ void Task::RunTask() {
     std::vector<std::shared_ptr<Task>> to_notify;
     {
         std::lock_guard<std::mutex> lk(dependents_mutex_);
-        for (auto& weak_t : dependents_) {
-            if (auto t = weak_t.lock()) to_notify.push_back(t);
+        to_notify.reserve(dependents_.size());
+        for (auto& dep : dependents_) {
+            if (auto t = dep.task.lock()) {
+                if (dep.is_trigger) {
+                    t->NotifyTriggerFinished();
+                } else {
+                    to_notify.push_back(t);
+                }
+            }
         }
         dependents_.clear();
     }
 
     for (auto& t : to_notify) {
         t->NotifyDependencyFinished();
-    }
-
-    to_notify.clear();
-    {
-        std::lock_guard<std::mutex> lk(dependents_mutex_);
-        for (auto& weak_t : trigger_dependents_) {
-            if (auto t = weak_t.lock()) to_notify.push_back(t);
-        }
-        trigger_dependents_.clear();
-    }
-
-    for (auto& t : to_notify) {
-        t->NotifyTriggerFinished();
     }
 }
 
 void Task::NotifyDependencyFinished() {
     if (remaining_deps_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         if (auto exec = executor_.lock()) {
-            exec->Enqueue(shared_from_this());
+            exec->Enqueue(shared_from_this(), current_thread_index);
         }
     }
 }
@@ -122,21 +123,24 @@ void Task::NotifyTriggerFinished() {
     bool expected = false;
     if (trigger_fired_.compare_exchange_strong(expected, true)) {
         if (auto exec = executor_.lock()) {
-            exec->Enqueue(shared_from_this());
+            exec->Enqueue(shared_from_this(), current_thread_index);
         }
     }
 }
 
 void Task::MarkFinished() {
-    State expected = State::Pending;
-    state_.compare_exchange_strong(expected, State::Canceled);
+    TaskState::Value expected = TaskState::Pending;
+    state_.compare_exchange_strong(expected, TaskState::Canceled);
     cv_.notify_all();
 }
 
-Executor::Executor(uint32_t num_threads) {
+Executor::Executor(uint32_t num_threads) : thread_queues_(num_threads) {
     workers_.reserve(num_threads);
     for (uint32_t i = 0; i < num_threads; ++i) {
-        workers_.emplace_back([this] { WorkerLoop(); });
+        workers_.emplace_back([this, i] { 
+            current_thread_index = i;
+            WorkerLoop(i); 
+        });
     }
 }
 
@@ -146,37 +150,22 @@ Executor::~Executor() {
 }
 
 void Executor::Submit(std::shared_ptr<Task> task) {
-    {
-        std::lock_guard<std::mutex> lk(queue_mutex_);
-        if (shutdown_.load()) {
-            task->Cancel();
-            return;
-        }
-        task->executor_ = shared_from_this();
-    }
+    task->executor_ = shared_from_this();
 
-    auto now = std::chrono::system_clock::now();
-    bool ready = false;
+    const auto now = std::chrono::system_clock::now();
+    const bool deps_ready = task->remaining_deps_.load() == 0;
+    const bool time_ready = !task->has_time_trigger_.load() || (now >= task->time_trigger_);
+    const bool trigger_ready = !task->has_trigger_.load() || task->trigger_fired_.load();
 
-    if (task->remaining_deps_.load(std::memory_order_relaxed) == 0) {
-        if (!task->has_time_trigger_.load(std::memory_order_relaxed) || 
-            (now >= task->time_trigger_)) {
-            if (!task->has_trigger_.load(std::memory_order_relaxed) || 
-                task->trigger_fired_.load(std::memory_order_relaxed)) {
-                ready = true;
-            }
-        }
-    }
-
-    if (ready) {
-        Enqueue(task);
-    } else if (task->has_time_trigger_.load(std::memory_order_relaxed)) {
+    if (deps_ready && time_ready && trigger_ready) {
+        Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
+    } else if (task->has_time_trigger_.load()) {
         auto deadline = task->time_trigger_;
         auto delay = deadline - now;
         std::thread([task, delay, this]() {
             std::this_thread::sleep_for(delay);
-            if (task->remaining_deps_.load(std::memory_order_relaxed) == 0) {
-                this->Enqueue(task);
+            if (task->remaining_deps_.load() == 0) {
+                this->Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
             }
         }).detach();
     }
@@ -184,7 +173,9 @@ void Executor::Submit(std::shared_ptr<Task> task) {
 
 void Executor::StartShutdown() {
     shutdown_.store(true);
-    queue_cv_.notify_all();
+    for (auto& q : thread_queues_) {
+        std::lock_guard<std::mutex> lk(q.mutex);
+    }
 }
 
 void Executor::WaitShutdown() {
@@ -193,29 +184,56 @@ void Executor::WaitShutdown() {
     }
 }
 
-void Executor::Enqueue(std::shared_ptr<Task> task) {
-    std::lock_guard<std::mutex> lk(queue_mutex_);
+void Executor::Enqueue(std::shared_ptr<Task> task, uint32_t preferred_thread) {
     if (shutdown_.load()) {
         task->Cancel();
         return;
     }
-    ready_queue_.push_back(task);
-    queue_cv_.notify_one();
+
+    auto& queue = thread_queues_[preferred_thread % thread_queues_.size()];
+    {
+        std::lock_guard<std::mutex> lk(queue.mutex);
+        queue.tasks.push_back(task);
+    }
 }
 
-void Executor::WorkerLoop() {
+bool Executor::TryStealWork(std::shared_ptr<Task>& task, uint32_t thief_index) {
+    const uint32_t num_queues = thread_queues_.size();
+    for (uint32_t i = 1; i < num_queues; ++i) {
+        uint32_t victim_index = (thief_index + i) % num_queues;
+        auto& victim_queue = thread_queues_[victim_index];
+        
+        std::unique_lock<std::mutex> lk(victim_queue.mutex, std::try_to_lock);
+        if (lk && !victim_queue.tasks.empty()) {
+            task = victim_queue.tasks.front();
+            victim_queue.tasks.pop_front();
+            return true;
+        }
+    }
+    return false;
+}
+
+void Executor::WorkerLoop(uint32_t thread_index) {
+    auto& local_queue = thread_queues_[thread_index];
+    
     while (true) {
         std::shared_ptr<Task> task;
+        
+        // Try local queue first
         {
-            std::unique_lock<std::mutex> lk(queue_mutex_);
-            queue_cv_.wait(lk, [this] {
-                return shutdown_.load() || !ready_queue_.empty();
-            });
-            
-            if (shutdown_.load() && ready_queue_.empty()) break;
-            
-            task = ready_queue_.front();
-            ready_queue_.pop_front();
+            std::lock_guard<std::mutex> lk(local_queue.mutex);
+            if (!local_queue.tasks.empty()) {
+                task = local_queue.tasks.front();
+                local_queue.tasks.pop_front();
+            }
+        }
+
+        if (!task && !TryStealWork(task, thread_index)) {
+            if (shutdown_.load()) {
+                break;
+            }
+            std::this_thread::yield();
+            continue;
         }
 
         if (task) {
