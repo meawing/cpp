@@ -2,148 +2,175 @@
 #include "executor.h"
 #include <cassert>
 #include <stdexcept>
-#include <chrono>
-#include <algorithm>
 
-thread_local uint32_t current_thread_index = 0;
+// =======================
+// Implementation of Task
+// =======================
 
 void Task::AddDependency(std::shared_ptr<Task> dep) {
-    remaining_deps_.fetch_add(1, std::memory_order_relaxed);
-    
-    {
-        std::lock_guard<std::mutex> lk(dep->dependents_mutex_);
-        dep->dependents_.push_back({shared_from_this(), false});
-    }
-    
-    if (dep->IsFinished()) {
-        NotifyDependencyFinished();
-    }
+    // Lock to protect the dependencies vector.
+    std::lock_guard<std::mutex> lk(mutex_);
+    dependencies_.push_back(dep);
 }
 
-void Task::AddTrigger(std::shared_ptr<Task> trigger) {
-    has_trigger_.store(true, std::memory_order_relaxed);
-    
-    {
-        std::lock_guard<std::mutex> lk(trigger->dependents_mutex_);
-        trigger->dependents_.push_back({shared_from_this(), true});
-    }
+void Task::AddTrigger(std::shared_ptr<Task> dep) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    triggers_.push_back(dep);
 }
 
 void Task::SetTimeTrigger(std::chrono::system_clock::time_point at) {
-    has_time_trigger_.store(true, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lk(mutex_);
     time_trigger_ = at;
+    has_time_trigger_ = true;
 }
 
-std::exception_ptr Task::GetError() const {
+bool Task::IsCompleted() {
+    return state_.load(std::memory_order_acquire) == State::Completed;
+}
+
+bool Task::IsFailed() {
+    return state_.load(std::memory_order_acquire) == State::Failed;
+}
+
+bool Task::IsCanceled() {
+    return state_.load(std::memory_order_acquire) == State::Canceled;
+}
+
+bool Task::IsFinished() {
+    auto s = state_.load(std::memory_order_acquire);
+    return (s == State::Completed ||
+            s == State::Failed ||
+            s == State::Canceled);
+}
+
+std::exception_ptr Task::GetError() {
     std::lock_guard<std::mutex> lk(mutex_);
     return error_;
 }
 
+// void Task::Cancel() {
+//     std::lock_guard<std::mutex> lk(mutex_);
+//     if (state_ == State::Pending) {
+//         state_ = State::Canceled;
+//         cv_.notify_all();
+//     }
+// }
+
 void Task::Cancel() {
-    TaskState::Value expected = TaskState::Pending;
-    if (!state_.compare_exchange_strong(expected, TaskState::Canceled)) {
-        return;
-    }
-
-    cv_.notify_all();
-
-    std::vector<std::shared_ptr<Task>> to_notify;
-    {
-        std::lock_guard<std::mutex> lk(dependents_mutex_);
-        to_notify.reserve(dependents_.size());
-        for (auto& dep : dependents_) {
-            if (auto t = dep.task.lock()) {
-                to_notify.push_back(t);
-            }
-        }
-        dependents_.clear();
-    }
-
-    for (auto& t : to_notify) {
-        if (t) {
-            if (t->remaining_deps_.load() > 0) {
-                t->NotifyDependencyFinished();
-            }
-            t->NotifyTriggerFinished();
-        }
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (state_.load(std::memory_order_acquire) == State::Pending) {
+        state_.store(State::Canceled, std::memory_order_release);
+        cv_.notify_all();
     }
 }
 
 void Task::Wait() {
     std::unique_lock<std::mutex> lk(mutex_);
-    cv_.wait(lk, [this] { return IsFinished(); });
+    cv_.wait(lk, [this] {
+        return state_ != State::Pending && state_ != State::Running;
+    });
+}
+
+bool Task::IsReady() {
+    std::vector<std::weak_ptr<Task>> local_dependencies;
+    std::vector<std::weak_ptr<Task>> local_triggers;
+    bool has_time = false;
+    std::chrono::system_clock::time_point time_trigger;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        // the task is ready if it is not pending (or running) anyway.
+        if (state_.load(std::memory_order_acquire) != State::Pending)
+            return true;
+        has_time = has_time_trigger_;
+        time_trigger = time_trigger_;
+        local_dependencies = dependencies_;
+        local_triggers = triggers_;
+    }
+
+    auto now = std::chrono::system_clock::now();
+    bool time_ok = has_time && (now >= time_trigger);
+
+    // Check triggers: if at least one trigger is finished.
+    bool trigger_ok = false;
+    for (auto& w : local_triggers) {
+        if (auto t = w.lock()) {
+            if (t->IsFinished()) {
+                trigger_ok = true;
+                break;
+            }
+        }
+    }
+
+    // Check dependencies: if there are any, then ALL must be finished.
+    bool dep_ok = false;
+    if (!local_dependencies.empty()) {
+        dep_ok = true;
+        for (auto& w : local_dependencies) {
+            if (auto dep = w.lock()) {
+                if (!dep->IsFinished()) {
+                    dep_ok = false;
+                    break;
+                }
+            }
+            // If the dependency pointer expired, assume it is finished.
+        }
+    }
+
+    // If any conditions were added, then the task becomes ready only if at least one condition is met.
+    if (!local_dependencies.empty() || !local_triggers.empty() || has_time) {
+        return dep_ok || trigger_ok || time_ok;
+    }
+    return true;
 }
 
 void Task::RunTask() {
-    TaskState::Value expected = TaskState::Pending;
-    if (!state_.compare_exchange_strong(expected, TaskState::Running)) {
-        return;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (state_ != State::Pending)
+            return; // if already canceled, do nothing
+        state_ = State::Running;
     }
-
     try {
         Run();
-        state_.store(TaskState::Completed);
-    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            state_ = State::Completed;
+            cv_.notify_all();
+        }
+    } catch(...) {
         std::lock_guard<std::mutex> lk(mutex_);
         error_ = std::current_exception();
-        state_.store(TaskState::Failed);
-    }
-
-    cv_.notify_all();
-
-    std::vector<std::shared_ptr<Task>> to_notify;
-    {
-        std::lock_guard<std::mutex> lk(dependents_mutex_);
-        to_notify.reserve(dependents_.size());
-        for (auto& dep : dependents_) {
-            if (auto t = dep.task.lock()) {
-                if (dep.is_trigger) {
-                    t->NotifyTriggerFinished();
-                } else {
-                    to_notify.push_back(t);
-                }
-            }
-        }
-        dependents_.clear();
-    }
-
-    for (auto& t : to_notify) {
-        t->NotifyDependencyFinished();
+        state_ = State::Failed;
+        cv_.notify_all();
     }
 }
 
-void Task::NotifyDependencyFinished() {
-    if (remaining_deps_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        if (auto exec = executor_.lock()) {
-            exec->Enqueue(shared_from_this(), current_thread_index);
-        }
-    }
+std::chrono::system_clock::time_point Task::GetTimeTrigger() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return time_trigger_;
 }
 
-void Task::NotifyTriggerFinished() {
-    bool expected = false;
-    if (trigger_fired_.compare_exchange_strong(expected, true)) {
-        if (auto exec = executor_.lock()) {
-            exec->Enqueue(shared_from_this(), current_thread_index);
-        }
-    }
+bool Task::HasTimeTrigger() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return has_time_trigger_;
 }
 
 void Task::MarkFinished() {
-    TaskState::Value expected = TaskState::Pending;
-    state_.compare_exchange_strong(expected, TaskState::Canceled);
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (state_ == State::Pending)
+        state_ = State::Canceled;
     cv_.notify_all();
 }
 
-Executor::Executor(uint32_t num_threads) : thread_queues_(num_threads) {
-    workers_.reserve(num_threads);
+// ==========================
+// Implementation of Executor
+// ==========================
+
+Executor::Executor(uint32_t num_threads) {
+    // Launch a fixed number of threads. They are all started in the constructor.
     for (uint32_t i = 0; i < num_threads; ++i) {
-        workers_.emplace_back([this, i] { 
-            current_thread_index = i;
-            WorkerLoop(i); 
-        });
+        workers_.emplace_back([this] { this->WorkerLoop(); });
     }
-    timer_thread_ = std::thread([this] { TimerThreadLoop(); });
 }
 
 Executor::~Executor() {
@@ -152,128 +179,107 @@ Executor::~Executor() {
 }
 
 void Executor::Submit(std::shared_ptr<Task> task) {
-    task->executor_ = shared_from_this();
-
-    const bool deps_ready = task->remaining_deps_.load() == 0;
-    const bool trigger_ready = !task->has_trigger_.load() || task->trigger_fired_.load();
-
-    if (task->has_time_trigger_.load()) {
-        std::lock_guard<std::mutex> lk(timer_mutex_);
-        timer_queue_.push({task, task->time_trigger_});
-        timer_cv_.notify_one();
-    } else if (deps_ready && trigger_ready) {
-        Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        // If shutdown is active, cancel this task immediately.
+        if (shutdown_) {
+            task->Cancel();
+            return;
+        }
+        // Place the task in the pending list.
+        pending_.push_back(task);
     }
+    cv_.notify_all();
 }
 
 void Executor::StartShutdown() {
-    shutdown_.store(true);
     {
-        std::lock_guard<std::mutex> lk(timer_mutex_);
-        timer_cv_.notify_all();
+        std::lock_guard<std::mutex> lk(mtx_);
+        shutdown_ = true;
+        // Cancel any tasks that haven’t started.
+        for (auto& t : pending_) {
+            t->Cancel();
+        }
     }
-    for (auto& q : thread_queues_) {
-        std::lock_guard<std::mutex> lk(q.mutex);
-    }
+    cv_.notify_all();
 }
 
 void Executor::WaitShutdown() {
-    for (auto& t : workers_) {
-        if (t.joinable()) t.join();
-    }
-    if (timer_thread_.joinable()) {
-        timer_thread_.join();
-    }
-}
-
-void Executor::Enqueue(std::shared_ptr<Task> task, uint32_t preferred_thread) {
-    if (shutdown_.load()) {
-        task->Cancel();
-        return;
-    }
-
-    auto& queue = thread_queues_[preferred_thread % thread_queues_.size()];
-    {
-        std::lock_guard<std::mutex> lk(queue.mutex);
-        queue.tasks.push_back(task);
+    // Wait for all worker threads to exit.
+    for (auto& thread : workers_) {
+        if (thread.joinable())
+            thread.join();
     }
 }
 
-bool Executor::TryStealWork(std::shared_ptr<Task>& task, uint32_t thief_index) {
-    const uint32_t num_queues = thread_queues_.size();
-    for (uint32_t i = 1; i < num_queues; ++i) {
-        uint32_t victim_index = (thief_index + i) % num_queues;
-        auto& victim_queue = thread_queues_[victim_index];
-        
-        std::unique_lock<std::mutex> lk(victim_queue.mutex, std::try_to_lock);
-        if (lk && !victim_queue.tasks.empty()) {
-            task = victim_queue.tasks.front();
-            victim_queue.tasks.pop_front();
-            return true;
-        }
-    }
-    return false;
-}
-
-void Executor::TimerThreadLoop() {
-    while (!shutdown_.load()) {
-        std::unique_lock<std::mutex> lock(timer_mutex_);
-        
-        if (timer_queue_.empty()) {
-            timer_cv_.wait(lock, [this] {
-                return !timer_queue_.empty() || shutdown_.load();
-            });
-        } else {
-            auto next_trigger = timer_queue_.top().trigger_time;
-            timer_cv_.wait_until(lock, next_trigger, [this, next_trigger] {
-                return shutdown_.load() || 
-                       (timer_queue_.empty() ? false : 
-                        timer_queue_.top().trigger_time < next_trigger);
-            });
-        }
-        
-        if (shutdown_.load()) break;
-        
-        const auto now = std::chrono::system_clock::now();
-        while (!timer_queue_.empty() && timer_queue_.top().trigger_time <= now) {
-            auto task = timer_queue_.top().task;
-            timer_queue_.pop();
-            
-            if (task->remaining_deps_.load() == 0) {
-                Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
-            }
-        }
-    }
-}
-
-void Executor::WorkerLoop(uint32_t thread_index) {
-    auto& local_queue = thread_queues_[thread_index];
-    
+void Executor::WorkerLoop() {
     while (true) {
         std::shared_ptr<Task> task;
-        
-        // Try local queue first
         {
-            std::lock_guard<std::mutex> lk(local_queue.mutex);
-            if (!local_queue.tasks.empty()) {
-                task = local_queue.tasks.front();
-                local_queue.tasks.pop_front();
-            }
-        }
+            std::unique_lock<std::mutex> lk(mtx_);
 
-        if (!task && !TryStealWork(task, thread_index)) {
-            if (shutdown_.load()) {
-                break;
-            }
-            std::this_thread::yield();
-            continue;
-        }
+            // Continuously check if any tasks are ready.
+            // First, try to promote pending tasks that meet their conditions.
+            cv_.wait(lk, [this] {
+                return shutdown_ || !pending_.empty() || !ready_.empty();
+            });
 
+            // Scan through pending tasks – if the task is either canceled or its ready conditions are met, move it to ready_.
+            auto now = std::chrono::system_clock::now();
+            for (auto it = pending_.begin(); it != pending_.end(); ) {
+                if ((*it)->IsCanceled() || (*it)->IsReady()) {
+                    ready_.push_front(*it);  // <<== Push ready tasks at the front.
+                    it = pending_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
+            // If there is at least one ready task, pop one.
+            if (!ready_.empty()) {
+                task = ready_.front();
+                ready_.pop_front();
+            }
+            else {
+                // If there is no ready task, then either:
+                // (a) no pending tasks, or (b) some tasks with time triggers not yet expired.
+                if (shutdown_ && pending_.empty() && ready_.empty())
+                    break; // exit thread if shutdown and no more tasks
+
+                // Determine the nearest deadline from tasks with time triggers.
+                std::chrono::system_clock::time_point next_time = now + std::chrono::hours(24);
+                bool found_deadline = false;
+                for (auto& t : pending_) {
+                    if (t->HasTimeTrigger()) {
+                        auto tt = t->GetTimeTrigger();
+                        if (tt < next_time) {
+                            next_time = tt;
+                            found_deadline = true;
+                        }
+                    }
+                }
+                if (found_deadline) {
+                    cv_.wait_until(lk, next_time);
+                } else {
+                    // Wait a short time so that we recheck conditions.
+                    cv_.wait_for(lk, std::chrono::milliseconds(1));
+                }
+                continue; // then re-loop to re-check ready tasks.
+            }
+        } // release executor lock
+
+        // Now run the task if not canceled.
         if (task) {
             if (task->IsCanceled()) {
-                task->MarkFinished();
+                task->MarkFinished(); // ensure waiters are notified
             } else {
                 task->RunTask();
+            }
+            // After finishing a task, notify all waiting (this might allow other tasks depending on this one
+            // to become ready).
+            {
+                std::lock_guard<std::mutex> lk(mtx_);
+                cv_.notify_all();
             }
         }
     }
@@ -282,3 +288,5 @@ void Executor::WorkerLoop(uint32_t thread_index) {
 std::shared_ptr<Executor> MakeThreadPoolExecutor(uint32_t num_threads) {
     return std::make_shared<Executor>(num_threads);
 }
+
+
