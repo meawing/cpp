@@ -168,151 +168,113 @@ protected:
 // ThenFuture: used by Executor::Then.
 // It executes the provided functor after its dependency (input) has finished.
 // It adds the dependency in its constructor so that it is not scheduled until input is done.
+// -----------------------------------------------------------------------------
+// Combinator Futures
+// -----------------------------------------------------------------------------
+
+// ThenFuture: Executes a functor after its dependency has finished.
 template <class Y, class T>
 class ThenFuture : public Future<Y> {
 public:
-    ThenFuture(FuturePtr<T> input, std::function<Y()> fn)
-        : Future<Y>(fn), input_(input), user_fn_(std::move(fn))
-    {
-        // Make this task wait for the input to finish.
-        this->AddDependency(input_);
-    }
+    // Constructor takes the functor.
+    ThenFuture(std::function<Y()> fn)
+        : Future<Y>(std::move(fn))
+    {}
 
     virtual void Run() override {
-        // At this point, the dependency is finished.
-        // Propagate error if input failed.
-        if (input_->IsFailed()) {
-            std::rethrow_exception(input_->GetError());
-        }
-        if (input_->IsCanceled()) { 
-            this->Cancel();
-            return;
-        }
-        // Optionally, one could call input_->Get() here to retrieve the input value.
-        // Then call user_fn_ (which in our design does not take arguments).
-        this->result_ = user_fn_();
+        // At this point the dependency is finished.
+        // Simply execute the functor.
+        this->result_ = this->func_();
     }
-private:
-    FuturePtr<T> input_;
-    std::function<Y()> user_fn_;
 };
 
-// --------------------------
-// WhenAllFuture: waits for all input futures to finish and collects their results.
+// WhenAllFuture: Waits for all input futures to finish and collects their results.
 template <class T>
 class WhenAllFuture : public Future<std::vector<T>> {
 public:
-    WhenAllFuture(std::vector<FuturePtr<T>> futures)
-        : Future<std::vector<T>>([&](){ return std::vector<T>{}; }), futures_(std::move(futures))
-    {
-        // Make this task depend on each future.
-        for (auto &f : futures_) {
-            this->AddDependency(f);
-        }
-    }
-    
-    // NEW OVERRIDE: When canceled, also cancel all children.
-    void Cancel() override {
-        // Call base cancellation.
-        Future<std::vector<T>>::Cancel();
-        // Propagate cancellation to each sub-future.
-        for (auto &f : futures_) {
-            f->Cancel();
-        }
-    }
-    
+    WhenAllFuture(const std::vector<typename Future<T>::Ptr>& fs)
+        : Future<std::vector<T>>([]{return std::vector<T>{};}), // Add this base class initializer
+          futures_(fs)
+    {}
+
     virtual void Run() override {
         std::vector<T> results;
-        // Collect results from the fired futures.
+        results.reserve(futures_.size());
         for (auto &f : futures_) {
-            // We ignore futures that are canceled or failed.
-            if (!f->IsCanceled() && !f->IsFailed()) {
-                results.push_back(f->Get());
-            }
+            // f->Get() will throw if an exception occurred in any future.
+            results.push_back(f->Get());
         }
-        this->result_ = results;
+        this->result_ = std::move(results);
     }
+    using Ptr = std::shared_ptr<WhenAllFuture<T>>;
 private:
-    std::vector<FuturePtr<T>> futures_;
+    std::vector<typename Future<T>::Ptr> futures_;
 };
 
-// --------------------------
-// WhenFirstFuture: waits until any one of its input futures is finished (using triggers)
-// and returns its result.
+// WhenFirstFuture: Waits until any one of the input futures is finished.
 template <class T>
 class WhenFirstFuture : public Future<T> {
 public:
-    WhenFirstFuture(std::vector<FuturePtr<T>> futures)
-        : Future<T>([&](){ return T{}; }), futures_(std::move(futures))
-    {
-        // Instead of dependencies (which require all to be finished),
-        // add each future as a trigger so that this task becomes ready when any of them finish.
-        for (auto &f : futures_) {
-            this->AddTrigger(f);
-        }
-    }
+    WhenFirstFuture(const std::vector<typename Future<T>::Ptr>& fs)
+        : Future<T>([]{T t{}; return t;}), // Add this base class initializer
+          futures_(fs)
+    {}
 
     virtual void Run() override {
-        // Busy-wait checking which future has finished.
-        // In practice one might want to avoid spun loops.
-        while (true) {
-            for (auto &f : futures_) {
-                if (f->IsFinished()) {
-                    if (f->IsFailed()) {
-                        std::rethrow_exception(f->GetError());
-                    }
-                    if (f->IsCanceled()) {
-                        this->Cancel();
-                        return;
-                    }
-                    this->result_ = f->Get();
-                    return;
-                }
+        // At least one trigger must have fired.
+        // Find the first future that is finished and get its result.
+        for (auto &f : futures_) {
+            if (f->IsFinished()) {
+                this->result_ = f->Get();
+                break;
             }
-            std::this_thread::yield();
         }
     }
+    using Ptr = std::shared_ptr<WhenFirstFuture<T>>;
 private:
-    std::vector<FuturePtr<T>> futures_;
+    std::vector<typename Future<T>::Ptr> futures_;
 };
 
-// --------------------------
-// WhenAllBeforeDeadlineFuture: collects results of futures that have finished before a given deadline.
+// WhenAllBeforeDeadlineFuture: At a given time deadline, collects results
+// from input futures that have finished before the deadline.
 template <class T>
 class WhenAllBeforeDeadlineFuture : public Future<std::vector<T>> {
 public:
-    WhenAllBeforeDeadlineFuture(std::vector<FuturePtr<T>> futures,
-                                  std::chrono::system_clock::time_point deadline)
-        : Future<std::vector<T>>([&](){ return std::vector<T>{}; }),
-          futures_(std::move(futures)),
-          deadline_(deadline)
+    WhenAllBeforeDeadlineFuture(const std::vector<typename Future<T>::Ptr>& fs,
+                                std::chrono::system_clock::time_point deadline)
+        : Future<std::vector<T>>([]{return std::vector<T>{};}), // Add this base class initializer
+          futures_(fs), deadline_(deadline)
     {
-        // The task should become ready either when all of its input futures finish
-        // or when the deadline is reached.
+        // Set a time trigger so that the task becomes eligible at deadline.
         this->SetTimeTrigger(deadline_);
-        for (auto& f : futures_) {
-            this->AddDependency(f);
-        }
     }
 
     virtual void Run() override {
         std::vector<T> results;
         for (auto &f : futures_) {
             if (f->IsFinished()) {
-                // Only add valid (non canceled/failed) results.
-                if (!f->IsCanceled() && !f->IsFailed()) {
-                    results.push_back(f->Get());
-                }
+                // Collect result if the future finished.
+                results.push_back(f->Get());
             }
         }
-        this->result_ = results;
+        this->result_ = std::move(results);
     }
-    
+    using Ptr = std::shared_ptr<WhenAllBeforeDeadlineFuture<T>>;
 private:
-    std::vector<FuturePtr<T>> futures_;
+    std::vector<typename Future<T>::Ptr> futures_;
     std::chrono::system_clock::time_point deadline_;
 };
 
+// Helper alias for FuturePtr.
+template <class T>
+using FuturePtr = std::shared_ptr<Future<T>>;
+
+// To simplify usage in combinators, add a public alias Ptr to Future.
+template <class T>
+class FutureWithPtr : public Future<T> {
+public:
+    using Ptr = std::shared_ptr<Future<T>>;
+};
 
 // ----------------------------------------------------------------------------
 // Fast Executor: uses a ready queue and events to schedule tasks
@@ -341,42 +303,54 @@ public:
     // Invoke: execute the provided function and return a Future for the result.
     template <class T>
     FuturePtr<T> Invoke(std::function<T()> fn) {
-        auto future = std::make_shared<Future<T>>(std::move(fn));
-        Submit(future);
-        return future;
+        auto fut = std::make_shared<Future<T>>(std::move(fn));
+        Submit(fut);
+        return fut;
     }
 
     // Then: execute fn after input has completed.
     template <class Y, class T>
     FuturePtr<Y> Then(FuturePtr<T> input, std::function<Y()> fn) {
-        auto future = std::make_shared<ThenFuture<Y, T>>(input, std::move(fn));
-        Submit(future);
-        return future;
+        auto fut = std::make_shared<ThenFuture<Y, T>>(std::move(fn));
+        // Register the dependency. With the revised AddDependency,
+        // if input is already finished the dependency is immediately considered satisfied.
+        fut->AddDependency(input);
+        Submit(fut);
+        return fut;
     }
 
     // WhenAll: given several futures, return a future with the vector of results.
     template <class T>
     FuturePtr<std::vector<T>> WhenAll(std::vector<FuturePtr<T>> all) {
-        auto future = std::make_shared<WhenAllFuture<T>>(std::move(all));
-        Submit(future);
-        return future;
+        auto fut = std::make_shared<WhenAllFuture<T>>(all);
+        // Add dependency on each input future.
+        for (auto &f : all) {
+            fut->AddDependency(f);
+        }
+        Submit(fut);
+        return fut;
     }
 
-    // WhenFirst: returns a future with the result of whichever of the supplied futures finishes first.
+    // WhenFirst: returns a future with the result of whichever future finishes first.
     template <class T>
     FuturePtr<T> WhenFirst(std::vector<FuturePtr<T>> all) {
-        auto future = std::make_shared<WhenFirstFuture<T>>(std::move(all));
-        Submit(future);
-        return future;
+        auto fut = std::make_shared<WhenFirstFuture<T>>(all);
+        // Register a trigger on each input future.
+        for (auto &f : all) {
+            fut->AddTrigger(f);
+        }
+        Submit(fut);
+        return fut;
     }
 
     // WhenAllBeforeDeadline: returns a future with results that are ready before the deadline.
     template <class T>
     FuturePtr<std::vector<T>> WhenAllBeforeDeadline(std::vector<FuturePtr<T>> all,
                                                     std::chrono::system_clock::time_point deadline) {
-        auto future = std::make_shared<WhenAllBeforeDeadlineFuture<T>>(std::move(all), deadline);
-        Submit(future);
-        return future;
+        auto fut = std::make_shared<WhenAllBeforeDeadlineFuture<T>>(all, deadline);
+        // No dependency registrations are used here so that the time trigger brings it in.
+        Submit(fut);
+        return fut;
     }
 
 
@@ -394,3 +368,4 @@ private:
 };
 
 std::shared_ptr<Executor> MakeThreadPoolExecutor(uint32_t num_threads);
+
