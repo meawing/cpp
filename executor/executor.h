@@ -138,7 +138,10 @@ using FuturePtr = std::shared_ptr<Future<T>>;
 template <class T>
 class Future : public Task {
 public:
-    // Constructor for a basic future wrapping a function.
+    // Add this type alias
+    using Ptr = std::shared_ptr<Future<T>>;
+    
+    // Rest of the class remains the same
     Future(std::function<T()> fn) 
         : func_(std::move(fn)) 
     {}
