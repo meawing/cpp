@@ -11,11 +11,13 @@ void Task::AddDependency(std::shared_ptr<Task> dep) {
     // Increase dependency count
     remainingDeps_.fetch_add(1, std::memory_order_relaxed);
     // Register self as a dependent on the dependency.
-    // (We do not use a lock here in the dep because AddDependency is expected
-    // to be called during task construction.)
     {
         std::lock_guard<std::mutex> lk(dep->dependents_mutex_);
         dep->dependents_.push_back(shared_from_this());
+    }
+    // If the dependency is already finished, immediately notify that it has finished.
+    if (dep->IsFinished()) {
+        NotifyDependencyFinished();
     }
 }
 
