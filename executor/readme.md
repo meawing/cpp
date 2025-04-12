@@ -67,6 +67,20 @@ bool DoComputation(std::shared_ptr<Executor> pool, Params params) {
     Функция может быть вызвана несколько раз.
   * `Executor::~Executor` - неявно делает shutdown и дожидается завершения потоков.
 
+### Futures
+
+Интерфейсы `Task` и `Executor` являются довольно многословными, во второй
+части задания вам нужно будет реализовать класс `Future` и несколько комбинаторов к нему.
+
+* `Future` - это `Task`, у которого есть результат (какое-то значение).
+
+* Интерфейсы комбинаторов определены в классе `Executor`:
+  * `Invoke(fn)` - выполнить `fn` внутри `Executor`-а, результат вернуть через `Future`.
+  * `Then(input, fn)` - выполнить `fn`, после того как закончится `input`. Возвращает `Future` на результат `fn` не дожидаясь выполнения `input`.
+  * `WhenAll(vector<FuturePtr<T>>) -> FuturePtr<vector<T>>` - собирает результат нескольких `Future` в один.
+  * `WhenFirst(vector<FuturePtr<T>>) -> FuturePtr<T>` - возвращает результат, который появится первым.
+  * `WhenAllBeforeDeadline(vector<FuturePtr<T>>, deadline) -> FuturePtr<vector<T>>` - возвращает все результаты, которые успели появиться до deadline.
+
 
 ## Советы по реализации
 
@@ -76,7 +90,7 @@ bool DoComputation(std::shared_ptr<Executor> pool, Params params) {
    код `assert`-ы.
 3. Начните с базового функционала: `Task`-и `Executor` без
    зависимостей и триггеров. Затем реализуйте зависимости и
-   триггеры
+   триггеры, поверх этого реализуйте `Future` и комбинаторы.
 4. Для реализации таймеров вам потребуется использовать метод
    `wait_until` у `std::condition_variable`.
 5. Для эффективной реализации таймеров нужно использовать кучу.
