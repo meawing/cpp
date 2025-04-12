@@ -8,25 +8,14 @@
 // ----------------------------------------------------------------------------
 
 void Task::AddDependency(std::shared_ptr<Task> dep) {
-    bool alreadyFinished = false;
+    // Increase dependency count
+    remainingDeps_.fetch_add(1, std::memory_order_relaxed);
+    // Register self as a dependent on the dependency.
+    // (We do not use a lock here in the dep because AddDependency is expected
+    // to be called during task construction.)
     {
-        // Lock the dependency’s mutex to read its state.
-        std::lock_guard<std::mutex> lk(dep->mutex_);
-        alreadyFinished = (dep->state_ == State::Completed ||
-                           dep->state_ == State::Failed ||
-                           dep->state_ == State::Canceled);
-    }
-    if (alreadyFinished) {
-        // If the dependency is already finished, then do not increase
-        // the dependency counter (effectively treating it as satisfied).
-        return;
-    } else {
-        // Otherwise, increment the dependency counter and register as a dependent.
-        remainingDeps_.fetch_add(1, std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lk(dep->dependents_mutex_);
-            dep->dependents_.push_back(shared_from_this());
-        }
+        std::lock_guard<std::mutex> lk(dep->dependents_mutex_);
+        dep->dependents_.push_back(shared_from_this());
     }
 }
 
