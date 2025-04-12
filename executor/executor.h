@@ -73,7 +73,10 @@ public:
     // ----------------------------------------------------------------
     // Called by the Executor when the task is submitted. This only stores
     // the executor pointer so that later notifications can enque the task.
-    void SetExecutor(Executor* exec) { executor_ = exec; }
+
+    void SetExecutor(std::shared_ptr<Executor> exec) { 
+        executor_ = exec; 
+    }    
 
     friend class Executor;
 
@@ -116,7 +119,10 @@ protected:
     std::chrono::system_clock::time_point time_trigger_;
 
     // Pointer to executor used to enqueue the task as soon as ready.
-    Executor* executor_ { nullptr };
+    // Executor* executor_ { nullptr };
+
+    std::weak_ptr<Executor> executor_;
+
 };
 
 template <class T>
@@ -188,7 +194,7 @@ class WhenAllBeforeDeadlineFuture : public Future<std::vector<T>> {
 // ----------------------------------------------------------------------------
 // Fast Executor: uses a ready queue and events to schedule tasks
 // ----------------------------------------------------------------------------
-class Executor {
+class Executor : public std::enable_shared_from_this<Executor> {
 public:
     Executor(uint32_t num_threads);
     ~Executor();
@@ -235,7 +241,6 @@ public:
     FuturePtr<std::vector<T>> WhenAllBeforeDeadline(std::vector<FuturePtr<T>> all,
                                                     std::chrono::system_clock::time_point deadline) {
                                                     }
-  
 
 private:
     void WorkerLoop();

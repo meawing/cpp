@@ -170,11 +170,10 @@ bool Task::HasTimeTrigger() {
 // Called when one dependency has finished. If that was the last dependency
 // OR a trigger has already fired, schedule the task.
 void Task::NotifyDependencyFinished() {
-    // Decrement the outstanding dependency count.
     if (remainingDeps_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        // All dependencies are finished—enqueue the task immediately.
-        if (executor_)
-            executor_->Enqueue(shared_from_this());
+        if (auto exec = executor_.lock()) {
+            exec->Enqueue(shared_from_this());
+        }
     }
 }
 
@@ -182,10 +181,10 @@ void Task::NotifyDependencyFinished() {
 // becomes ready even if some dependencies are still pending.
 void Task::NotifyTriggerFinished() {
     bool expected = false;
-    // Only act on the first trigger.
     if (triggerFired_.compare_exchange_strong(expected, true)) {
-        if (executor_)
-            executor_->Enqueue(shared_from_this());
+        if (auto exec = executor_.lock()) {
+            exec->Enqueue(shared_from_this());
+        }
     }
 }
 
@@ -213,7 +212,15 @@ Executor::~Executor() {
 }
 
 void Executor::Submit(std::shared_ptr<Task> task) {
-    task->SetExecutor(this);
+    {
+        std::lock_guard<std::mutex> lk(queue_mutex_);
+        if (shutdown_) {
+            task->Cancel();
+            return;
+        }
+        task->SetExecutor(shared_from_this());  // Changed to shared_from_this
+    }
+    // task->SetExecutor(this);
     bool ready = false;
     auto now = std::chrono::system_clock::now();
     if (task->remainingDeps_.load(std::memory_order_relaxed) == 0 &&
@@ -263,11 +270,12 @@ void Executor::WaitShutdown() {
 
 // Called by tasks when they become ready.
 void Executor::Enqueue(std::shared_ptr<Task> task) {
-    {
-        std::lock_guard<std::mutex> lk(queue_mutex_);
-        // If the task was canceled meanwhile, we still enqueue it so that waiters are notified.
-        ready_queue_.push_back(task);
+    std::lock_guard<std::mutex> lk(queue_mutex_);
+    if (shutdown_) {
+        task->Cancel();
+        return;
     }
+    ready_queue_.push_back(std::move(task));
     queue_cv_.notify_one();
 }
 
