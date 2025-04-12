@@ -1,3 +1,4 @@
+// executor.h
 #pragma once
 
 #include <memory>
@@ -9,6 +10,8 @@
 #include <deque>
 #include <mutex>
 #include <condition_variable>
+#include <queue>
+#include <functional>
 
 class Executor;
 
@@ -64,7 +67,6 @@ private:
     std::atomic<bool> has_time_trigger_{false};
     std::chrono::system_clock::time_point time_trigger_;
 
-    // Single consolidated dependents list with type flag
     struct Dependent {
         std::weak_ptr<Task> task;
         bool is_trigger;
@@ -81,9 +83,7 @@ class Future;
 template <class T>
 using FuturePtr = std::shared_ptr<Future<T>>;
 
-// Used instead of void in generic code
 struct Unit {};
-
 
 class Executor : public std::enable_shared_from_this<Executor> {
 public:
@@ -110,23 +110,37 @@ public:
 
     template <class T>
     FuturePtr<std::vector<T>> WhenAllBeforeDeadline(std::vector<FuturePtr<T>> all,
-                                                    std::chrono::system_clock::time_point deadline);
+                                                  std::chrono::system_clock::time_point deadline);
 
-    
 private:
     struct ThreadLocalQueue {
         std::deque<std::shared_ptr<Task>> tasks;
         std::mutex mutex;
     };
 
+    struct TimerTask {
+        std::shared_ptr<Task> task;
+        std::chrono::system_clock::time_point trigger_time;
+        
+        bool operator<(const TimerTask& other) const {
+            return trigger_time > other.trigger_time; // min-heap
+        }
+    };
+
     void WorkerLoop(uint32_t thread_index);
     bool TryStealWork(std::shared_ptr<Task>& task, uint32_t thief_index);
+    void TimerThreadLoop();
     
-
     std::vector<ThreadLocalQueue> thread_queues_;
     std::atomic<bool> shutdown_{false};
     std::vector<std::thread> workers_;
     std::atomic<uint32_t> next_thread_{0};
+    
+    // Timer management
+    std::mutex timer_mutex_;
+    std::condition_variable timer_cv_;
+    std::priority_queue<TimerTask> timer_queue_;
+    std::thread timer_thread_;
 };
 
 std::shared_ptr<Executor> MakeThreadPoolExecutor(uint32_t num_threads);

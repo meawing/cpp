@@ -1,3 +1,4 @@
+// executor.cpp
 #include "executor.h"
 #include <cassert>
 #include <stdexcept>
@@ -142,6 +143,7 @@ Executor::Executor(uint32_t num_threads) : thread_queues_(num_threads) {
             WorkerLoop(i); 
         });
     }
+    timer_thread_ = std::thread([this] { TimerThreadLoop(); });
 }
 
 Executor::~Executor() {
@@ -152,27 +154,24 @@ Executor::~Executor() {
 void Executor::Submit(std::shared_ptr<Task> task) {
     task->executor_ = shared_from_this();
 
-    const auto now = std::chrono::system_clock::now();
     const bool deps_ready = task->remaining_deps_.load() == 0;
-    const bool time_ready = !task->has_time_trigger_.load() || (now >= task->time_trigger_);
     const bool trigger_ready = !task->has_trigger_.load() || task->trigger_fired_.load();
 
-    if (deps_ready && time_ready && trigger_ready) {
+    if (task->has_time_trigger_.load()) {
+        std::lock_guard<std::mutex> lk(timer_mutex_);
+        timer_queue_.push({task, task->time_trigger_});
+        timer_cv_.notify_one();
+    } else if (deps_ready && trigger_ready) {
         Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
-    } else if (task->has_time_trigger_.load()) {
-        auto deadline = task->time_trigger_;
-        auto delay = deadline - now;
-        std::thread([task, delay, this]() {
-            std::this_thread::sleep_for(delay);
-            if (task->remaining_deps_.load() == 0) {
-                this->Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
-            }
-        }).detach();
     }
 }
 
 void Executor::StartShutdown() {
     shutdown_.store(true);
+    {
+        std::lock_guard<std::mutex> lk(timer_mutex_);
+        timer_cv_.notify_all();
+    }
     for (auto& q : thread_queues_) {
         std::lock_guard<std::mutex> lk(q.mutex);
     }
@@ -181,6 +180,9 @@ void Executor::StartShutdown() {
 void Executor::WaitShutdown() {
     for (auto& t : workers_) {
         if (t.joinable()) t.join();
+    }
+    if (timer_thread_.joinable()) {
+        timer_thread_.join();
     }
 }
 
@@ -211,6 +213,37 @@ bool Executor::TryStealWork(std::shared_ptr<Task>& task, uint32_t thief_index) {
         }
     }
     return false;
+}
+
+void Executor::TimerThreadLoop() {
+    while (!shutdown_.load()) {
+        std::unique_lock<std::mutex> lock(timer_mutex_);
+        
+        if (timer_queue_.empty()) {
+            timer_cv_.wait(lock, [this] {
+                return !timer_queue_.empty() || shutdown_.load();
+            });
+        } else {
+            auto next_trigger = timer_queue_.top().trigger_time;
+            timer_cv_.wait_until(lock, next_trigger, [this, next_trigger] {
+                return shutdown_.load() || 
+                       (timer_queue_.empty() ? false : 
+                        timer_queue_.top().trigger_time < next_trigger);
+            });
+        }
+        
+        if (shutdown_.load()) break;
+        
+        const auto now = std::chrono::system_clock::now();
+        while (!timer_queue_.empty() && timer_queue_.top().trigger_time <= now) {
+            auto task = timer_queue_.top().task;
+            timer_queue_.pop();
+            
+            if (task->remaining_deps_.load() == 0) {
+                Enqueue(task, next_thread_.fetch_add(1, std::memory_order_relaxed) % workers_.size());
+            }
+        }
+    }
 }
 
 void Executor::WorkerLoop(uint32_t thread_index) {
