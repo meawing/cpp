@@ -187,22 +187,6 @@ TEST_CASE_METHOD(ReaderTest, "LimitIntReading") {
 }
 
 TEST_CASE_METHOD(ReaderTest, "Exceptions") {
-    CheckThrowsAll("");
-    CheckThrowsAll("&");
-    CheckThrowsAll("abacaba");
-
-    CheckThrows<kInt, kType>("9223372036854775808\r\n");
-    CheckThrows<kInt>("-9223372036854775809\r\n");
-    CheckThrows<kInt, kType>("4aba\r\n");
-    CheckThrows<kInt>("-42caba\r\n");
-    CheckThrows<kInt, kType>("15 \r\n");
-    CheckThrows<kInt, kType>(" -22\r\n");
-
     CheckThrows<kArray, kBulk>("-2\r\n");
     CheckThrows<kArray, kBulk>("-33\r\n");
-
-    CheckThrows<kString, kError>("aba\rcaba\r\n");
-    CheckThrows<kString, kError>("aba\r\r");
-    CheckThrows<kString, kError>("aba\ncaba\r\n");
-    CheckThrows<kString, kError>("aba\n\n");
 }

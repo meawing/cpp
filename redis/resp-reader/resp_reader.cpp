@@ -104,21 +104,32 @@ std::optional<std::string_view> RespReader::ReadBulkString() {
                 bulk_string_buffer_.data() + bytes_read,
                 length - bytes_read
             );
-            bytes_read += reader_->Read(chunk);
+            size_t read_result = reader_->Read(chunk);
+            if (read_result == 0) {
+                throw RedisError("Unexpected end of input");
+            }
+            bytes_read += read_result;
         }
     }
 
     // Read and verify CRLF terminator
     char crlf[2];
-    if (reader_->Read(cactus::View(crlf, 2)) != 2) {
-        throw RedisError("Unexpected end of input");
+    size_t crlf_read = 0;
+    while (crlf_read < 2) {
+        size_t read_result = reader_->Read(cactus::View(crlf + crlf_read, 2 - crlf_read));
+        if (read_result == 0) {
+            throw RedisError("Unexpected end of input");
+        }
+        crlf_read += read_result;
     }
+    
     if (crlf[0] != '\r' || crlf[1] != '\n') {
         throw RedisError("Invalid bulk string termination");
     }
 
     return std::string_view(bulk_string_buffer_.data(), length);
 }
+
 
 int64_t RespReader::ReadArrayLength() {
     return ReadInt();
