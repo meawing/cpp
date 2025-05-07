@@ -4,4 +4,4 @@ function(add_target NAME FILE)
     target_include_directories(${NAME} PRIVATE ../parsecpp-constants)
 endfunction()
 
-add_target(test_basic_parsers test_basic_parsers.cpp)
+add_target(test_basic_combinators test_basic_combinators.cpp)
