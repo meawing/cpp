@@ -27,3 +27,11 @@ struct PSeq {
     static constexpr auto operator()(Input in) noexcept;
 };
 }
+
+namespace ps {
+namespace operators {
+auto operator|(...);
+
+auto operator+(...);
+}
+}
