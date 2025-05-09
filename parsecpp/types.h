@@ -27,4 +27,4 @@ using ParseResult = std::expected<Output<T>, ParseError>;
 
 template <typename TParser>
 concept CParser = std::invocable<TParser, Input>;
-}
+}  // namespace ps
