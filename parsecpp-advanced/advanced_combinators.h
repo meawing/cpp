@@ -28,10 +28,3 @@ struct PSeq {
 };
 }
 
-namespace ps {
-namespace operators {
-auto operator|(...);
-
-auto operator+(...);
-}
-}
