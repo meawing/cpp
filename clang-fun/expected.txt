@@ -1,14 +1,6 @@
-0
-lib.cpp
-23
-lib.h Var 0 5
-lib.h my_struct 2 7
-lib.h A 0 8
-lib.h b_ 0 9
-lib.h foo 4 10
-lib.h templateStruct 2 14
-lib.h foo_bar 4 16
-lib.h Param 0 16
+1
+fun.cpp
+30
 fun.h Static_Method 4 15
 fun.h bad_bield 1 20
 fun.h reallyBad_ 1 21
@@ -19,9 +11,24 @@ fun.h JustAStruct 2 32
 fun.h bad_field_ 0 34
 fun.h var_ 0 39
 fun.h size 4 41
-lib.cpp foo 4 4
-lib.cpp X 0 5
-lib.cpp Var 0 10
-lib.cpp templateStruct 2 13
-lib.cpp foo_bar 4 15
+fun.cpp bad_val 1 3
+fun.cpp var_ 0 6
+fun.cpp size 4 8
+fun.cpp BadShortAB 4 16
+fun.cpp dummy1 0 17
+fun.cpp fail 4 21
+fun.cpp BIGNAME 4 25
+fun.cpp F 0 25
+fun.cpp shitHappens 2 30
+fun.cpp hi_ 0 32
+fun.cpp O 4 36
+fun.cpp NotOK 2 44
+fun.cpp just__few_words 0 51
+fun.cpp _hello_world 0 52
+fun.cpp _ 0 54
+fun.cpp Wrong 0 55
+fun.cpp STOP_RIGHT_THERE_CRIMINAL_SCUM 0 57
+fun.cpp hi_there_ 0 63
+fun.cpp myunion 2 65
+fun.cpp first_chair_ 0 66
 0
