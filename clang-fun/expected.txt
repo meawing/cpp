@@ -1,4 +1,30 @@
-1
+2
+lib.cpp
+23
+lib.h Var 0 5
+lib.h my_struct 2 7
+lib.h A 0 8
+lib.h b_ 0 9
+lib.h foo 4 10
+lib.h templateStruct 2 14
+lib.h foo_bar 4 16
+lib.h Param 0 16
+fun.h Static_Method 4 15
+fun.h bad_bield 1 20
+fun.h reallyBad_ 1 21
+fun.h kBad_ 3 24
+fun.h bad_val 1 25
+fun.h privateMethod 4 27
+fun.h JustAStruct 2 32
+fun.h bad_field_ 0 34
+fun.h var_ 0 39
+fun.h size 4 41
+lib.cpp foo 4 4
+lib.cpp X 0 5
+lib.cpp Var 0 10
+lib.cpp templateStruct 2 13
+lib.cpp foo_bar 4 15
+0
 fun.cpp
 30
 fun.h Static_Method 4 15
