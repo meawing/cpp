@@ -147,12 +147,38 @@ public:
 
     // Visit variable declarations.
     bool VisitVarDecl(VarDecl *Declaration) {
+        if (Declaration->isImplicit())
+            return true;
+
         std::string Name = Declaration->getNameAsString();
         if (Name.empty())
             return true;
+
         SourceLocation Loc = Declaration->getLocation();
         if (Loc.isInvalid() || SM.isInSystemHeader(Loc))
             return true;
+
+        // Handle macro expansions correctly
+        if (SM.isMacroBodyExpansion(Loc) || SM.isMacroArgExpansion(Loc)) {
+            Loc = SM.getExpansionLoc(Loc);  // Get the usage location
+        } else {
+            Loc = SM.getSpellingLoc(Loc);   // Regular case
+        }
+
+        // Skip if in system header after location adjustment
+        if (SM.isInSystemHeader(Loc))
+            return true;
+
+        // Get the actual filename
+        std::string FileName = SM.getFilename(Loc).str();
+        if (FileName.empty())
+            return true;
+
+        // Explicit check for single-letter uppercase variables
+        if (Name.size() == 1 && std::isupper(Name[0])) {
+            addBadName(Name, Entity::kVariable, Loc);
+            return true;
+        }
 
         // Handle static data members using getDeclContext().
         if (Declaration->isStaticDataMember()) {
@@ -188,7 +214,7 @@ public:
                 addBadName(Name, Entity::kVariable, Loc);
         }
         return true;
-    }
+    } 
 
     // Visit field declarations.
     bool VisitFieldDecl(FieldDecl *Declaration) {
