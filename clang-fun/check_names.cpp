@@ -372,9 +372,8 @@ public:
             return true;
         }
         
-        // For constexpr or const globals, use constant naming.
-        if (Declaration->isConstexpr() ||
-            (Declaration->getType().isConstQualified() && Declaration->hasGlobalStorage())) {
+        // For constexpr or const variables (both global and local), use constant naming.
+        if (Declaration->isConstexpr() || Declaration->getType().isConstQualified()) {
             if (!isValidConstName(Name))
                 addBadName(Name, Entity::kConst, Loc);
         } else {
@@ -455,6 +454,10 @@ public:
             return true;
         std::string Name = Declaration->getNameAsString();
         if (Name.empty())
+            return true;
+            
+        // Skip operator overloading functions (e.g., operator==, operator())
+        if (Name.compare(0, 8, "operator") == 0)
             return true;
             
         // Use point of declaration for location, not point of definition
