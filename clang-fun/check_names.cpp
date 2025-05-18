@@ -11,6 +11,9 @@
 #include <cctype>
 #include <string>
 #include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
+#include <fstream>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -18,6 +21,88 @@ using namespace llvm;
 
 // Command line options
 static cl::OptionCategory CheckNamesCategory("Check Names options");
+static cl::opt<std::string> DictionaryPath("dict", cl::desc("Path to dictionary file"), cl::cat(CheckNamesCategory));
+
+// Dictionary for typo detection
+class Dictionary {
+public:
+    Dictionary() = default;
+
+    void loadFromFile(const std::string& path) {
+        std::ifstream file(path);
+        if (!file.is_open()) return;
+        
+        std::string word;
+        while (file >> word) {
+            // Convert to lowercase for case-insensitive comparison
+            std::transform(word.begin(), word.end(), word.begin(), 
+                          [](unsigned char c){ return std::tolower(c); });
+            words.insert(word);
+        }
+    }
+
+    bool contains(const std::string& word) const {
+        std::string lowerWord = word;
+        std::transform(lowerWord.begin(), lowerWord.end(), lowerWord.begin(), 
+                      [](unsigned char c){ return std::tolower(c); });
+        return words.find(lowerWord) != words.end();
+    }
+
+    // Find closest word in the dictionary using Levenshtein distance
+    std::string findClosestWord(const std::string& word, int maxDistance = 2) const {
+        std::string lowerWord = word;
+        std::transform(lowerWord.begin(), lowerWord.end(), lowerWord.begin(), 
+                      [](unsigned char c){ return std::tolower(c); });
+        
+        int minDistance = maxDistance + 1;
+        std::string closestWord;
+        
+        for (const auto& dictWord : words) {
+            int distance = levenshteinDistance(lowerWord, dictWord);
+            if (distance < minDistance && distance > 0) {
+                minDistance = distance;
+                closestWord = dictWord;
+            }
+        }
+        
+        return closestWord;
+    }
+
+private:
+    std::unordered_set<std::string> words;
+
+    // Levenshtein distance algorithm
+    int levenshteinDistance(const std::string& s1, const std::string& s2) const {
+        // Early exit if the string lengths differ significantly
+        if (std::abs(static_cast<int>(s1.length() - s2.length())) > 2) {
+            return 3; // Beyond our threshold
+        }
+
+        const size_t m = s1.size();
+        const size_t n = s2.size();
+        
+        // Create a matrix with (m+1) rows and (n+1) columns
+        std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1, 0));
+        
+        // Initialize the first row and column
+        for (size_t i = 0; i <= m; i++) dp[i][0] = i;
+        for (size_t j = 0; j <= n; j++) dp[0][j] = j;
+        
+        // Fill the matrix
+        for (size_t i = 1; i <= m; i++) {
+            for (size_t j = 1; j <= n; j++) {
+                int cost = (s1[i - 1] == s2[j - 1]) ? 0 : 1;
+                dp[i][j] = std::min({
+                    dp[i - 1][j] + 1,        // deletion
+                    dp[i][j - 1] + 1,        // insertion
+                    dp[i - 1][j - 1] + cost  // substitution
+                });
+            }
+        }
+        
+        return dp[m][n];
+    }
+};
 
 // Helper functions for name checks
 
@@ -125,11 +210,40 @@ static bool isValidMethodName(const std::string &Name) {
            !containsDigits(Name);
 }
 
+// Helper function to extract words from identifiers
+static std::vector<std::string> extractWords(const std::string& name) {
+    std::vector<std::string> words;
+    std::string currentWord;
+    
+    for (char c : name) {
+        if (c == '_' || c == 'k') {
+            if (!currentWord.empty()) {
+                words.push_back(currentWord);
+                currentWord.clear();
+            }
+            continue;
+        }
+        
+        if (std::isupper(c) && !currentWord.empty() && std::islower(currentWord.back())) {
+            words.push_back(currentWord);
+            currentWord.clear();
+        }
+        
+        currentWord += c;
+    }
+    
+    if (!currentWord.empty()) {
+        words.push_back(currentWord);
+    }
+    
+    return words;
+}
+
 // The AST visitor class
 class NameChecker : public RecursiveASTVisitor<NameChecker> {
 public:
-    explicit NameChecker(ASTContext *Context, Statistics &Stats)
-        : Context(Context), Stats(Stats), SM(Context->getSourceManager()) {}
+    explicit NameChecker(ASTContext *Context, Statistics &Stats, const Dictionary &Dict)
+        : Context(Context), Stats(Stats), SM(Context->getSourceManager()), Dict(Dict) {}
 
     // Report a violation with file, name, entity code, and line.
     void addBadName(const std::string &Name, Entity EntityType, SourceLocation Loc) {
@@ -143,6 +257,60 @@ public:
             FileName = FileName.substr(LastSlash + 1);
         unsigned Line = SM.getSpellingLineNumber(Loc);
         Stats.bad_names.push_back({FileName, Name, EntityType, Line});
+        
+        // Check for potential typos
+        checkTypos(Name, Loc);
+    }
+    
+    // Check for typos in identifier names
+    void checkTypos(const std::string &Name, SourceLocation Loc) {
+        // If no dictionary was loaded or no dictionary file was provided, skip typo check
+        if (DictionaryPath.empty()) {
+            return;
+        }
+        
+        std::string FileName = SM.getFilename(Loc).str();
+        if (FileName.empty())
+            return;
+        size_t LastSlash = FileName.find_last_of("/\\");
+        if (LastSlash != std::string::npos)
+            FileName = FileName.substr(LastSlash + 1);
+        unsigned Line = SM.getSpellingLineNumber(Loc);
+        
+        // Break the identifier into words
+        auto words = extractWords(Name);
+        
+        for (const auto& word : words) {
+            // Skip very short words (likely not typos or not meaningful)
+            if (word.size() <= 2)
+                continue;
+                
+            // Skip if word is all uppercase (likely an acronym)
+            bool allUpper = true;
+            for (char c : word) {
+                if (!std::isupper(c)) {
+                    allUpper = false;
+                    break;
+                }
+            }
+            if (allUpper)
+                continue;
+                
+            // Convert to lowercase for dictionary check
+            std::string lowerWord = word;
+            std::transform(lowerWord.begin(), lowerWord.end(), lowerWord.begin(), 
+                          [](unsigned char c){ return std::tolower(c); });
+                
+            // Skip if word is in dictionary
+            if (Dict.contains(lowerWord))
+                continue;
+                
+            // Find closest match in dictionary with max distance of 2
+            std::string suggestion = Dict.findClosestWord(lowerWord, 2);
+            if (!suggestion.empty()) {
+                Stats.mistakes.push_back({FileName, Name, lowerWord, suggestion, Line});
+            }
+        }
     }
 
     // Visit variable declarations.
@@ -190,9 +358,9 @@ public:
                     // For classes (declared with 'class'), members must follow non‑public field style.
                     if (RD->isClass()) {
                         if (!isValidNonPublicFieldName(Name))
-                            addBadName(Name, Entity::kVariable, Loc);
+                            addBadName(Name, Entity::kField, Loc);
                     } else {
-                        // For structs/unions, use public naming rules.
+                        // For structs/unions, use public naming rules and report as kVariable
                         if (!isValidPublicFieldName(Name))
                             addBadName(Name, Entity::kVariable, Loc);
                     }
@@ -288,9 +456,19 @@ public:
         std::string Name = Declaration->getNameAsString();
         if (Name.empty())
             return true;
+            
+        // Use point of declaration for location, not point of definition
         SourceLocation Loc = Declaration->getLocation();
         if (Loc.isInvalid() || SM.isInSystemHeader(Loc))
             return true;
+            
+        // Ensure we use the actual declaration location, not the definition
+        if (Declaration->isThisDeclarationADefinition() && Declaration->getPointOfInstantiation().isValid()) {
+            // For templated functions, use the point of declaration
+            const FunctionDecl *Template = Declaration->getTemplateInstantiationPattern();
+            if (Template)
+                Loc = Template->getLocation();
+        }
         
         // For constexpr functions, enforce constant naming.
         if (Declaration->isConstexpr()) {
@@ -322,12 +500,13 @@ private:
     ASTContext *Context;
     Statistics &Stats;
     SourceManager &SM;
+    const Dictionary &Dict;
 };
 
 class NameConsumer : public ASTConsumer {
 public:
-    explicit NameConsumer(ASTContext *Context, Statistics &Stats)
-        : Visitor(Context, Stats) { }
+    explicit NameConsumer(ASTContext *Context, Statistics &Stats, const Dictionary &Dict)
+        : Visitor(Context, Stats, Dict) { }
     void HandleTranslationUnit(ASTContext &Context) override {
         Visitor.TraverseDecl(Context.getTranslationUnitDecl());
     }
@@ -338,7 +517,11 @@ private:
 class NameAction : public ASTFrontendAction {
 public:
     NameAction(std::unordered_map<std::string, Statistics> &StatsMap)
-        : StatsMap(StatsMap) { }
+        : StatsMap(StatsMap) {
+        if (!DictionaryPath.empty()) {
+            Dict.loadFromFile(DictionaryPath);
+        }
+    }
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &Compiler,
                                                    StringRef File) override {
         std::string FileName = File.str();
@@ -346,10 +529,11 @@ public:
         if (LastSlash != std::string::npos)
             FileName = FileName.substr(LastSlash + 1);
         Statistics &Stats = StatsMap[FileName];
-        return std::make_unique<NameConsumer>(&Compiler.getASTContext(), Stats);
+        return std::make_unique<NameConsumer>(&Compiler.getASTContext(), Stats, Dict);
     }
 private:
     std::unordered_map<std::string, Statistics> &StatsMap;
+    Dictionary Dict;
 };
 
 class NameActionFactory : public FrontendActionFactory {
