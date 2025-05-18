@@ -1,0 +1,174 @@
+5
+bit_field.cpp
+20
+bit_field.h TBitField 2 7
+bit_field.h BitLen 1 10
+bit_field.h MemLen 1 11
+bit_field.h pMem 1 12
+bit_field.h TBitField 4 14
+bit_field.h TBitField 4 15
+bit_field.h TBitField 4 16
+bit_field.h ~TBitField 4 17
+bit_field.h n 3 20
+bit_field.h n 3 22
+bit_field.h n 3 23
+bit_field.cpp TBitField 4 7
+bit_field.cpp TBitField 4 17
+bit_field.cpp TBitField 4 34
+bit_field.cpp ~TBitField 4 45
+bit_field.cpp n 3 50
+bit_field.cpp n 3 57
+bit_field.cpp n 3 64
+bit_field.cpp n 3 78
+bit_field.cpp Source 0 191
+13
+bit_field.h GetMemIndex Index idea 22
+bit_field.h GetMemMask Mask ask 23
+bit_field.h GetLenght Lenght eight 24
+bit_field.h istr istr into 31
+bit_field.h ostr ostr cost 32
+bit_field.cpp GetMemIndex Index idea 73
+bit_field.cpp GetMemMask Mask ask 78
+bit_field.cpp GetLenght Lenght eight 83
+bit_field.cpp temp temp deep 139
+bit_field.cpp temp temp deep 159
+bit_field.cpp temp temp deep 174
+bit_field.cpp istr istr into 183
+bit_field.cpp ostr ostr cost 212
+set.cpp
+41
+bit_field.h TBitField 2 7
+bit_field.h BitLen 1 10
+bit_field.h MemLen 1 11
+bit_field.h pMem 1 12
+bit_field.h TBitField 4 14
+bit_field.h TBitField 4 15
+bit_field.h TBitField 4 16
+bit_field.h ~TBitField 4 17
+bit_field.h n 3 20
+bit_field.h n 3 22
+bit_field.h n 3 23
+set.h TSet 2 5
+set.h MaxPower 1 8
+set.h BitField 1 9
+set.h TSet 4 11
+set.h maxPower 0 11
+set.h TSet 4 12
+set.h TSet 4 13
+set.h n 3 16
+set.h n 3 17
+set.h set_ 0 21
+set.h Set 0 23
+set.h n 3 24
+set.h n 3 25
+set.h _ist 0 27
+set.h bf_ 0 27
+set.cpp TSet 4 3
+set.cpp maxPower 0 3
+set.cpp TSet 4 7
+set.cpp TSet 4 11
+set.cpp BF 0 11
+set.cpp N 3 25
+set.cpp nN 3 30
+set.cpp _ 0 35
+set.cpp tmpB 0 49
+set.cpp tmpB 0 56
+set.cpp n 3 61
+set.cpp BB 0 64
+set.cpp n 3 69
+set.cpp BB 0 72
+set.cpp tmpB 0 78
+15
+bit_field.h GetMemIndex Index idea 22
+bit_field.h GetMemMask Mask ask 23
+bit_field.h GetLenght Lenght eight 24
+bit_field.h istr istr into 31
+bit_field.h ostr ostr cost 32
+set.h InsElem Elem else 16
+set.h DelElem Elem else 17
+set.cpp InsElem Elem else 20
+set.cpp DelElem Elem else 25
+set.cpp temp temp deep 50
+set.cpp temp temp deep 57
+set.cpp temp temp deep 79
+set.cpp istr istr into 83
+set.cpp temp temp deep 85
+set.cpp ostr ostr cost 102
+sorting.cpp
+0
+27
+sorting.cpp BubbleSort Bubble able 6
+sorting.cpp sequence sequence science 6
+sorting.cpp iteration iteration operation 7
+sorting.cpp SelectionSort Selection election 18
+sorting.cpp sequence sequence science 18
+sorting.cpp left_border border order 19
+sorting.cpp min_element_index element event 22
+sorting.cpp min_element_index index idea 22
+sorting.cpp OutputSequence Output out 29
+sorting.cpp OutputSequence Sequence science 29
+sorting.cpp sequence sequence science 30
+sorting.cpp TestBubbleSort Bubble able 38
+sorting.cpp test_sequence sequence science 38
+sorting.cpp correct_answer correct current 39
+sorting.cpp sequence sequence science 40
+sorting.cpp RunUnitTests Tests test 52
+sorting.cpp GetRandomSequence Random and 72
+sorting.cpp GetRandomSequence Sequence science 72
+sorting.cpp modulo modulo model 72
+sorting.cpp sequence sequence science 73
+sorting.cpp element element event 74
+sorting.cpp RunStressTest Stress street 80
+sorting.cpp max_modulo modulo model 81
+sorting.cpp modulo modulo model 86
+sorting.cpp attempt attempt accept 88
+sorting.cpp test_sequence sequence science 89
+sorting.cpp correct_answer correct current 90
+test_file.cpp
+16
+test_file.cpp bad 4 7
+test_file.cpp point 2 12
+test_file.cpp point 4 13
+test_file.cpp point 4 16
+test_file.cpp value 4 19
+test_file.cpp ABAcaba 2 24
+test_file.cpp ABACaBA 2 26
+test_file.cpp aBACaBAC 2 27
+test_file.cpp ABACABA 2 28
+test_file.cpp ABAcaBA 2 29
+test_file.cpp Abacaba1 2 30
+test_file.cpp BuildDSUnion 4 34
+test_file.cpp bac42 0 34
+test_file.cpp Foo15 4 38
+test_file.cpp FooABa 4 40
+test_file.cpp a1 0 48
+20
+test_file.h Privat Privat private 3
+test_file.h Grop Grop drop 7
+test_file.h kTrun Trun run 8
+test_file.h Prcle Prcle price 11
+test_file.h Thret Thret threat 13
+test_file.h foood_ foood food 14
+test_file.h NotceHundreadArticles Notce note 17
+test_file.h NotceHundreadArticles Hundread hundred 17
+test_file.h NotceHundreadArticles Articles article 17
+test_file.cpp Maesure Maesure measure 4
+test_file.cpp ABACaba Caba baby 25
+test_file.cpp CreateASTMatcher Matcher father 36
+test_file.cpp FOOABa FOOA food 41
+test_file.cpp cenutry cenutry century 44
+test_file.cpp sill sill bill 44
+test_file.cpp just_some_realy_llong_name_babe realy ready 46
+test_file.cpp just_some_realy_llong_name_babe llong along 46
+test_file.cpp just_some_realy_llong_name_babe babe baby 46
+test_file.cpp kGramarNazi Gramar game 50
+test_file.cpp kGramarNazi Nazi name 50
+some.cpp
+2
+some.cpp Test_ 4 3
+some.cpp Test 0 3
+4
+some.cpp WrpngSomg Wrpng wrong 10
+some.cpp WrpngSomg Somg some 10
+some.cpp ~WrpngSomg Wrpng wrong 11
+some.cpp ~WrpngSomg Somg some 11

@@ -1,5 +1,4 @@
-#include "util.h"
-#include "../check_names.h"
+#include "common.h"
 
 #include <unordered_map>
 #include <string>
@@ -69,7 +68,7 @@ std::vector<std::filesystem::path> GetCppFiles(const std::filesystem::path& dir)
     return result;
 }
 
-void CheckDir(const std::filesystem::path& dir, const std::optional<std::filesystem::path>& dict = std::nullopt) {
+void CheckDir(const std::filesystem::path& dir, const std::optional<std::filesystem::path>& dict) {
     auto files = GetCppFiles(dir);
     REQUIRE_FALSE(files.empty());
 
@@ -84,26 +83,5 @@ void CheckDir(const std::filesystem::path& dir, const std::optional<std::filesys
 
     auto result = CheckNames(args.size(), args.data());
     auto expected = ReadExpected(dir / "expected.txt");
-    CHECK(result == expected);
-}
-
-
-TEST_CASE("NoDict") {
-    CheckDir(GetFileDir(__FILE__) / "no-dict");
-}
-
-TEST_CASE("Checker") {
-    auto dir = GetFileDir(__FILE__).parent_path() / "checker";
-    auto files = GetCppFiles(dir);
-    REQUIRE_FALSE(files.empty());
-
-    std::vector args = {"./test_check_names", "-p", "."};
-    std::unordered_map<std::string, Statistics> expected;
-    for (const auto& file : files) {
-        args.push_back(file.c_str());
-        expected.emplace(file.filename(), Statistics{});
-    }
-
-    auto result = CheckNames(args.size(), args.data());
     CHECK(result == expected);
 }

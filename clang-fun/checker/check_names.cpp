@@ -153,13 +153,13 @@ static bool isValidTypeName(const std::string &Name) {
     }
     if (allUpper)
         return false;
-    // For every contiguous block of uppercase letters,
+    // For every contiguous block of uppercase letters and digits,
     // if its length is greater than 1 and less than 3, the name is rejected.
     size_t i = 0;
     while (i < Name.length()) {
-        if (std::isupper(Name[i])) {
+        if (std::isupper(Name[i]) || std::isdigit(Name[i])) {
             size_t j = i + 1;
-            while (j < Name.length() && std::isupper(Name[j]))
+            while (j < Name.length() && (std::isupper(Name[j]) || std::isdigit(Name[j])))
                 j++;
             size_t seq = j - i;
             if (seq > 1 && seq < 3)
@@ -169,7 +169,10 @@ static bool isValidTypeName(const std::string &Name) {
             i++;
         }
     }
-    return !containsDigits(Name);
+    // Check for any digits in the name - they're not allowed according to requirement #4
+    if (containsDigits(Name))
+        return false;
+    return true;
 }
 
 static bool isValidConstName(const std::string &Name) {
@@ -187,6 +190,14 @@ static bool isValidConstName(const std::string &Name) {
 static bool isValidSnakeCaseFunctionName(const std::string &Name) {
     if (Name.empty() || !std::islower(Name[0]))
         return false;
+    // Functions with prefix verbs followed by underscores (like is_, has_, etc.) violate style
+    if (Name.size() >= 3) {
+        static const std::vector<std::string> bad_prefixes = {"is_", "has_", "can_", "should_", "does_", "was_", "get_", "set_"};
+        for (const auto& prefix : bad_prefixes) {
+            if (Name.compare(0, prefix.size(), prefix) == 0)
+                return false;
+        }
+    }
     std::regex pattern("^[a-z][a-z0-9_]*$");
     return std::regex_match(Name, pattern) &&
            Name.find("__") == std::string::npos &&
@@ -445,6 +456,27 @@ public:
         return true;
     }
 
+    // Visit constructor declarations to check class names
+    bool VisitCXXConstructorDecl(CXXConstructorDecl *Declaration) {
+        if (Declaration->isImplicit())
+            return true;
+        
+        // Get the class name from the constructor
+        std::string ClassName = Declaration->getParent()->getNameAsString();
+        if (ClassName.empty())
+            return true;
+            
+        SourceLocation Loc = Declaration->getLocation();
+        if (Loc.isInvalid() || SM.isInSystemHeader(Loc))
+            return true;
+            
+        // Check if the class name follows valid type naming rules
+        if (!isValidTypeName(ClassName))
+            addBadName(ClassName, Entity::kType, Loc);
+            
+        return true;
+    }
+
     // Visit function declarations.
     bool VisitFunctionDecl(FunctionDecl *Declaration) {
         if (Declaration->isImplicit())
@@ -480,8 +512,8 @@ public:
             return true;
         }
         
-        // For non‑static member functions (methods)
-        if (Declaration->isCXXClassMember() && !Declaration->isStatic()) {
+        // For all member functions (both static and non-static), use method name style
+        if (Declaration->isCXXClassMember()) {
             if (!isValidMethodName(Name))
                 addBadName(Name, Entity::kFunction, Loc);
         }
@@ -559,7 +591,17 @@ std::unordered_map<std::string, Statistics> CheckNames(int argc, const char* arg
     CommonOptionsParser &OptionsParser = ExpectedParser.get();
     ClangTool Tool(OptionsParser.getCompilations(), OptionsParser.getSourcePathList());
     std::unordered_map<std::string, Statistics> StatsMap;
-    NameActionFactory Factory(StatsMap);
-    Tool.run(&Factory);
+    
+    // First, collect all source files and sort them to ensure consistent order
+    std::vector<std::string> sourceFiles = OptionsParser.getSourcePathList();
+    std::sort(sourceFiles.begin(), sourceFiles.end());
+    
+    // Process files in the sorted order
+    for (const auto& file : sourceFiles) {
+        ClangTool SingleFileTool(OptionsParser.getCompilations(), {file});
+        NameActionFactory Factory(StatsMap);
+        SingleFileTool.run(&Factory);
+    }
+    
     return StatsMap;
 }
