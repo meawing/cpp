@@ -1,4 +1,49 @@
-1
+2
+segment.cpp
+42
+segment.cpp size 3 26
+segment.cpp is_empty 4 45
+segment.cpp num_points 4 115
+segment.cpp part_index 4 117
+segment.cpp ImmutableSegmentTree2DBuilder 2 128
+segment.cpp ImmutableSegmentTree2D 2 133
+segment.cpp root_range 3 144
+segment.cpp query_range 3 145
+segment.cpp ImmutableSegmentTree2D 4 152
+segment.cpp ImmutableSegmentTree2D 4 154
+segment.cpp left_child_index 4 163
+segment.cpp right_child_index 4 165
+segment.cpp middle 3 176
+segment.cpp ImmutableSegmentTree2DBuilder 2 195
+segment.cpp size 3 212
+segment.cpp BuildImmutableSegmentTree2D 4 234
+segment.cpp n_queries 3 304
+segment.cpp image 3 358
+segment.cpp count 3 393
+segment.cpp correct_count 3 395
+segment.cpp size 4 408
+segment.cpp size 3 446
+segment.cpp permutation 3 470
+segment.cpp analyzer 3 471
+segment.cpp size 3 473
+segment.cpp range 3 476
+segment.cpp firstValue 0 479
+segment.cpp secondValue 0 479
+segment.cpp firstValue 0 482
+segment.cpp secondValue 0 482
+segment.cpp firstValue 0 486
+segment.cpp secondValue 0 486
+segment.cpp firstValue 0 487
+segment.cpp secondValue 0 487
+segment.cpp firstValue 0 488
+segment.cpp secondValue 0 488
+segment.cpp firstValue 0 489
+segment.cpp secondValue 0 489
+segment.cpp firstValue 0 490
+segment.cpp secondValue 0 490
+segment.cpp firstValue 0 491
+segment.cpp secondValue 0 491
+0
 perm.cpp
 42
 perm.cpp size 3 27
