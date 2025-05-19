@@ -21,4 +21,17 @@ bit_field.cpp n 3 57
 bit_field.cpp n 3 64
 bit_field.cpp n 3 78
 bit_field.cpp Source 0 191
-0
+13
+bit_field.h GetMemIndex Index idea 22
+bit_field.h GetMemMask Mask ask 23
+bit_field.h GetLenght Lenght eight 24
+bit_field.h istr istr into 31
+bit_field.h ostr ostr cost 32
+bit_field.cpp GetMemIndex Index idea 73
+bit_field.cpp GetMemMask Mask ask 78
+bit_field.cpp GetLenght Lenght eight 83
+bit_field.cpp temp temp deep 139
+bit_field.cpp temp temp deep 159
+bit_field.cpp temp temp deep 174
+bit_field.cpp istr istr into 183
+bit_field.cpp ostr ostr cost 212
